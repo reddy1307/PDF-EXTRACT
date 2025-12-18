@@ -64,13 +64,28 @@ def categorize(desc, txn_type):
     return "Other Expense"
 
 def parse_line(line):
-    date = re.search(r"([A-Z][a-z]{2} \d{2}, \d{4})", line).group(1)
-    amount = re.search(r"₹([\d,]+\.?\d*)", line).group(1)
-    txn_type = re.search(r"\b(CREDIT|DEBIT)\b", line).group(1)
-    desc = re.search(r"(Received from|Paid to)\s(.+?)\s(CREDIT|DEBIT)", line).group(2)
+    date_match = re.search(r"([A-Z][a-z]{2} \d{2}, \d{4})", line)
+    date = (
+        pd.to_datetime(date_match.group(1), format="%b %d, %Y")
+        if date_match else None
+    )
 
-    amount = float(amount.replace(",", ""))
-    date = pd.to_datetime(date, format="%b %d, %Y")
+    amount_match = re.search(r"₹([\d,]+\.?\d*)", line)
+    amount = (
+        float(amount_match.group(1).replace(",", ""))
+        if amount_match else 0.0
+    )
+
+    type_match = re.search(r"\b(CREDIT|DEBIT)\b", line)
+    txn_type = type_match.group(1) if type_match else "UNKNOWN"
+
+    desc_match = re.search(
+    r"(Received from|Paid to|Cashback from|Transfer to)\s(.+?)\s(CREDIT|DEBIT)",
+    line,
+    re.IGNORECASE 
+    )
+    desc = desc_match.group(2) if desc_match else line.strip()
+
 
     return {
         "date": date,
@@ -79,6 +94,7 @@ def parse_line(line):
         "amount": amount,
         "category": categorize(desc, txn_type)
     }
+
 
 @app.post("/upload")
 async def upload_pdf(file: UploadFile = File(...)):
@@ -120,9 +136,10 @@ async def upload_pdf(file: UploadFile = File(...)):
         clean_lines.append(line)
 
     f_lines=[]
-    for i in range(1,len(clean_lines)):
-        if i % 4 == 1:
-            f_lines.append(clean_lines[i])
+    for i in range(1, len(clean_lines)):
+      if  re.search(r"\b(CREDIT|DEBIT)\b", clean_lines[i]):
+         f_lines.append(clean_lines[i])
+
     print(f_lines)
 
 
