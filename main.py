@@ -1,0 +1,140 @@
+from fastapi import FastAPI, UploadFile, File
+import pdfplumber,re,io
+import pandas as pd
+app = FastAPI()
+
+def categorize(desc, txn_type):
+    d = desc.lower()
+    if txn_type == "CREDIT":
+        return "Income / Transfer In"
+
+    categories = {
+        "Recharge": [
+            "airtel", "jio", "vi", "vodafone", "idea", "bsnl"
+        ],
+        "Food & Dining": [
+            "zomato", "swiggy", "dominos", "pizza", "mcdonald",
+            "kfc", "restaurant", "cafe", "hotel", "eatfit"
+        ],
+        "Fuel": [
+            "petrol", "diesel", "fuel", "oil", "indian oil",
+            "hp", "bharat petroleum", "shell"
+        ],
+        "Shopping": [
+            "amazon", "flipkart", "myntra", "ajio", "meesho",
+            "snapdeal", "store", "mart"
+        ],
+        "Groceries": [
+            "bigbasket", "blinkit", "zepto", "instamart",
+            "dmart", "grocery"
+        ],
+        "Travel": [
+            "uber", "ola", "rapido", "irctc", "makemytrip",
+            "yatra", "redbus"
+        ],
+        "Entertainment": [
+            "netflix", "prime", "hotstar", "spotify",
+            "bookmyshow", "sony liv"
+        ],
+        "Utilities": [
+            "electricity", "power", "water", "gas",
+            "bill", "recharge"
+        ],
+        "Education": [
+            "udemy", "coursera", "byju", "unacademy",
+            "college", "school", "exam"
+        ],
+        "Healthcare": [
+            "hospital", "clinic", "pharmacy", "apollo",
+            "medplus", "1mg", "pharmeasy"
+        ],
+        "Banking & Finance": [
+            "emi", "loan", "interest", "insurance",
+            "mutual fund", "sip", "credit card"
+        ],
+        "Transfer Out": [
+            "paid to"
+        ]
+    }
+
+    for category, keywords in categories.items():
+        if any(keyword in d for keyword in keywords):
+            return category
+
+    return "Other Expense"
+
+def parse_line(line):
+    date = re.search(r"([A-Z][a-z]{2} \d{2}, \d{4})", line).group(1)
+    amount = re.search(r"₹([\d,]+\.?\d*)", line).group(1)
+    txn_type = re.search(r"\b(CREDIT|DEBIT)\b", line).group(1)
+    desc = re.search(r"(Received from|Paid to)\s(.+?)\s(CREDIT|DEBIT)", line).group(2)
+
+    amount = float(amount.replace(",", ""))
+    date = pd.to_datetime(date, format="%b %d, %Y")
+
+    return {
+        "date": date,
+        "description": desc,
+        "type": txn_type,
+        "amount": amount,
+        "category": categorize(desc, txn_type)
+    }
+
+@app.post("/upload")
+async def upload_pdf(file: UploadFile = File(...)):
+    contents = await file.read()
+    pdf_bytes = io.BytesIO(contents)
+    texts = []
+    with pdfplumber.open(pdf_bytes) as pdf:
+        for i, page in enumerate(pdf.pages):
+            text = page.extract_text()
+            texts.append(text)
+    raw_text = "\n".join(texts)
+
+
+    lines = raw_text.split("\n")
+
+    clean_lines = []
+    footer_phrases = [
+        "this is an automatically generated statement",
+        "the recipient specified in this document"
+    ]
+
+    clean_lines = []
+    clean_lines = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("Page"):
+            continue
+        if "system generated statement" in line.lower():
+            continue
+        if line.startswith("Transaction Statement for"):
+            continue
+        if line.startswith("Date Transaction"):
+            continue
+
+        if any(phrase in line.lower() for phrase in footer_phrases):
+            break  
+        clean_lines.append(line)
+
+    f_lines=[]
+    for i in range(1,len(clean_lines)):
+        if i % 4 == 1:
+            f_lines.append(clean_lines[i])
+    print(f_lines)
+
+
+
+
+    rows = []
+    for i in f_lines:
+        rows.append(parse_line(i))
+
+    df = pd.DataFrame(rows)
+
+    return {
+        "transactions": df.to_dict(orient="records"),
+        "count": len(df)
+    }

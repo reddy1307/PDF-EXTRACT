@@ -1,0 +1,5 @@
+uvicorn
+pdfplumber
+fastapi
+python-multipart
+pandas
