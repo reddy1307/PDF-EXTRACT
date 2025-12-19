@@ -1,7 +1,15 @@
 from fastapi import FastAPI, UploadFile, File
 import pdfplumber,re,io
 import pandas as pd
+from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], 
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 def categorize(desc, txn_type):
     d = desc.lower()
