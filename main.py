@@ -86,13 +86,22 @@ def parse_line(line):
     )
     desc = desc_match.group(2) if desc_match else line.strip()
 
+    utr_match = re.search(
+        r"\bUTR(?:\s*No\.?)?[:\-\s]*([0-9]+)\b",
+        line,
+        re.IGNORECASE
+    )
+    utr = utr_match.group(1) if utr_match else None
+
+
 
     return {
         "date": date,
         "description": desc,
         "type": txn_type,
         "amount": amount,
-        "category": categorize(desc, txn_type)
+        "category": categorize(desc, txn_type),
+        "UTR_No": utr
     }
 
 
@@ -110,13 +119,13 @@ async def upload_pdf(file: UploadFile = File(...)):
 
     lines = raw_text.split("\n")
 
-    clean_lines = []
+
     footer_phrases = [
         "this is an automatically generated statement",
         "the recipient specified in this document"
     ]
 
-    clean_lines = []
+  
     clean_lines = []
     for line in lines:
         line = line.strip()
@@ -136,20 +145,28 @@ async def upload_pdf(file: UploadFile = File(...)):
         clean_lines.append(line)
 
     f_lines=[]
-    for i in range(1, len(clean_lines)):
-      if  re.search(r"\b(CREDIT|DEBIT)\b", clean_lines[i]):
-         f_lines.append(clean_lines[i])
-
-    print(f_lines)
-
-
-
-
+    for i in range(len(clean_lines)):
+        if re.search(r"\b(CREDIT|DEBIT)\b|\bUTR\s*No\b", clean_lines[i], re.IGNORECASE):
+            f_lines.append(clean_lines[i])
     rows = []
-    for i in f_lines:
-        rows.append(parse_line(i))
+    j = 0
 
-    df = pd.DataFrame(rows)
+    while j < len(f_lines):
+        current_line = f_lines[j]
+        if (
+            j + 1 < len(f_lines)
+            and re.search(r"\bUTR\s*No\b", f_lines[j + 1], re.IGNORECASE)
+        ):
+            combined_line = current_line + " " + f_lines[j + 1]
+            rows.append(combined_line)
+            j += 2
+        else:
+            rows.append(current_line)
+            j += 1
+
+
+    nrows = [parse_line(line) for line in rows]
+    df = pd.DataFrame(nrows)
 
     return {
         "transactions": df.to_dict(orient="records"),
