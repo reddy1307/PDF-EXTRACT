@@ -78,33 +78,44 @@ def parse_line(line):
         if date_match else None
     )
 
+    time_match = re.search(
+        r"\b(\d{1,2}:\d{2}(?::\d{2})?\s?(?:AM|PM)?)\b",
+        line,
+        re.IGNORECASE
+    )
+    time_str = time_match.group(1) if time_match else None
+
+    if date is not None and time_str:
+        datetime = pd.to_datetime(
+            f"{date.strftime('%b %d, %Y')} {time_str}",
+            errors="coerce"
+        )
+    else:
+        datetime = date  # fallback to date only
+
     amount_match = re.search(r"₹([\d,]+\.?\d*)", line)
     amount = (
         float(amount_match.group(1).replace(",", ""))
         if amount_match else 0.0
     )
-
     type_match = re.search(r"\b(CREDIT|DEBIT)\b", line)
     txn_type = type_match.group(1) if type_match else "UNKNOWN"
-
     desc_match = re.search(
-    r"(Received from|Paid to|Cashback from|Transfer to)\s(.+?)\s(CREDIT|DEBIT)",
-    line,
-    re.IGNORECASE 
+        r"(Received from|Paid to|Cashback from|Transfer to)\s(.+?)\s(CREDIT|DEBIT)",
+        line,
+        re.IGNORECASE
     )
     desc = desc_match.group(2) if desc_match else line.strip()
-
     utr_match = re.search(
         r"\bUTR(?:\s*No\.?)?[:\-\s]*([0-9]+)\b",
         line,
         re.IGNORECASE
     )
     utr = utr_match.group(1) if utr_match else None
-
-
-
     return {
         "date": date,
+        "time": time_str,
+        "datetime": datetime,
         "description": desc,
         "type": txn_type,
         "amount": amount,
@@ -112,6 +123,7 @@ def parse_line(line):
         "UTR_No": utr
     }
 
+   
 
 @app.post("/upload")
 async def upload_pdf(file: UploadFile = File(...)):
@@ -154,7 +166,11 @@ async def upload_pdf(file: UploadFile = File(...)):
 
     f_lines=[]
     for i in range(len(clean_lines)):
-        if re.search(r"\b(CREDIT|DEBIT)\b|\bUTR\s*No\b", clean_lines[i], re.IGNORECASE):
+        if re.search(
+            r"\b(CREDIT|DEBIT)\b|\bUTR\s*No\b|\bTransaction\s*ID\b",
+            clean_lines[i],
+            re.IGNORECASE
+        ):
             f_lines.append(clean_lines[i])
     rows = []
     j = 0
@@ -162,16 +178,15 @@ async def upload_pdf(file: UploadFile = File(...)):
     while j < len(f_lines):
         current_line = f_lines[j]
         if (
-            j + 1 < len(f_lines)
-            and re.search(r"\bUTR\s*No\b", f_lines[j + 1], re.IGNORECASE)
+            j + 2 < len(f_lines)
+            and re.search(r"\bUTR\s*No\b", f_lines[j + 2], re.IGNORECASE)
         ):
-            combined_line = current_line + " " + f_lines[j + 1]
+            combined_line = current_line + " " + f_lines[j + 1]+ " " + f_lines[j + 2]
             rows.append(combined_line)
-            j += 2
+            j += 3
         else:
-            rows.append(current_line)
-            j += 1
-
+            rows.append(current_line+ " " + f_lines[j + 1] )
+            j += 2
 
     nrows = [parse_line(line) for line in rows]
     df = pd.DataFrame(nrows)
