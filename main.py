@@ -113,7 +113,7 @@ def parse_line(line):
     )
     utr = utr_match.group(1) if utr_match else None
     return {
-        "date": date,
+        "date": datetime,
         "time": time_str,
         "datetime": datetime,
         "description": desc,
@@ -195,3 +195,4 @@ async def upload_pdf(file: UploadFile = File(...)):
         "transactions": df.to_dict(orient="records"),
         "count": len(df)
     }
+
