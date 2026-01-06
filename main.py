@@ -1,222 +1,420 @@
 from fastapi import FastAPI, UploadFile, File
-from fastapi.middleware.cors import CORSMiddleware
-import pdfplumber
-import re
-import io
+import pdfplumber,re,io
 import pandas as pd
-
-# =========================
-# FASTAPI SETUP
-# =========================
+from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI()
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"], 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# =========================
-# CATEGORY RULES (MATCH FRONTEND)
-# =========================
-RAW_CATEGORY_RULES = {
-    "Income / Transfer In": [
-        r"salary", r"income", r"transfer.*in", r"credit.*transfer",
-        r"deposit", r"refund", r"interest.*received",
-        r"dividend", r"bonus", r"reimbursement"
-    ],
-
-    "Recharge": [
-        r"airtel", r"jio", r"vi", r"vodafone", r"idea", r"bsnl",
-        r"recharge", r"prepaid", r"postpaid",
-        r"mobile.*bill", r"phone.*bill", r"telecom", r"sim.*card"
-    ],
-
-    "Food & Dining": [
-        r"zomato", r"swiggy", r"dominos", r"pizza", r"mcdonald", r"mcd", r"kfc",
-        r"restaurant", r"cafe", r"hotel", r"eatfit",
-        r"food", r"dining", r"lunch", r"dinner", r"breakfast",
-        r"coffee", r"chai", r"juice",
-        r"bakery", r"dessert", r"ice.*cream",
-        r"fast.*food", r"street.*food", r"dhaba",
-        r"bar", r"pub", r"buffet"
-    ],
-
-    "Fuel": [
-        r"petrol", r"diesel", r"fuel", r"oil",
-        r"indian.*oil", r"hpcl", r"bharat.*petroleum",
-        r"shell", r"gas", r"cng", r"lpg",
-        r"petrol.*pump", r"filling.*station"
-    ],
-
-    "Shopping": [
-        r"amazon", r"flipkart", r"myntra", r"ajio", r"meesho", r"snapdeal",
-        r"shopping", r"purchase", r"buy", r"shop",
-        r"mall", r"market", r"store", r"mart",
-        r"fashion", r"clothing", r"electronics", r"furniture"
-    ],
-
-    "Groceries": [
-        r"bigbasket", r"blinkit", r"zepto", r"instamart", r"dmart",
-        r"grocery", r"vegetable", r"fruit", r"kirana",
-        r"milk", r"bread", r"egg", r"rice", r"wheat", r"snacks"
-    ],
-
-    "Travel": [
-        r"uber", r"ola", r"rapido", r"irctc",
-        r"makemytrip", r"yatra", r"redbus",
-        r"taxi", r"cab", r"bus", r"train",
-        r"metro", r"flight"
-    ],
-
-    "Entertainment": [
-        r"netflix", r"prime", r"hotstar", r"spotify",
-        r"bookmyshow", r"sony.*liv",
-        r"movie", r"cinema", r"gaming", r"ott", r"streaming"
-    ],
-
-    "Utilities": [
-        r"electricity", r"power", r"water", r"gas",
-        r"bill", r"utility", r"internet",
-        r"wifi", r"broadband", r"rent", r"emi", r"insurance"
-    ],
-
-    "Education": [
-        r"udemy", r"coursera", r"byju", r"unacademy",
-        r"school", r"college", r"education", r"course",
-        r"tuition", r"books", r"stationery"
-    ],
-
-    "Healthcare": [
-        r"hospital", r"clinic", r"pharmacy",
-        r"apollo", r"medplus", r"1mg", r"pharmeasy",
-        r"doctor", r"medicine", r"medical",
-        r"health.*insurance"
-    ],
-
-    "Banking & Finance": [
-        r"emi", r"loan", r"interest", r"insurance",
-        r"mutual.*fund", r"sip", r"credit.*card",
-        r"investment", r"stock", r"tax", r"gst"
-    ],
-
-    "Transfer Out": [
-        r"paid.*to", r"transfer.*out", r"sent.*to",
-        r"upi.*payment", r"imps", r"neft", r"rtgs",
-        r"gift", r"donation", r"subscription"
-    ],
-}
-
-# Compile regex once (important for performance)
-CATEGORY_RULES = {
-    category: [re.compile(p, re.I) for p in patterns]
-    for category, patterns in RAW_CATEGORY_RULES.items()
-}
-
-# =========================
-# CATEGORIZE FUNCTION
-# =========================
-def categorize(description: str, txn_type: str) -> str:
-    desc = description.lower()
-
+def categorize(desc, txn_type):
+    d = desc.lower()
+    
+    # Treat all credits as income
     if txn_type.upper() == "CREDIT":
         return "Income / Transfer In"
 
-    for category, patterns in CATEGORY_RULES.items():
-        for pattern in patterns:
-            if pattern.search(desc):
-                return category
+    # Check for Transfer Out patterns first (since they're specific)
+    transfer_out_keywords = [
+        "paid to", "transfer out", "sent to", "upi payment", "imps", 
+        "neft", "rtgs", "gift", "donation", "charity", "subscription", 
+        "monthly fee", "wallet", "paytm", "phonepe", "gpay", "google pay",
+        "send money", "money transfer", "payment to"
+    ]
+    if any(keyword in d for keyword in transfer_out_keywords):
+        return "Transfer Out"
 
+    # Check categories in priority order (most specific first)
+    
+    # 1. Healthcare - MEDICAL STORES SHOULD GO HERE
+    healthcare_keywords = [
+        "medical store", "medical shop", "pharmacy", "chemist", "apollo pharmacy",
+        "medplus", "wellness pharmacy", "1mg", "pharmeasy", "netmeds", "pharmacy",
+        "drug store", "medicine shop", "health store", "medical", "clinic",
+        "hospital", "doctor", "diagnostic", "pathology", "lab test", "healthcare",
+        "surgery", "vaccine", "dental", "optical", "physiotherapy", "therapist"
+    ]
+    if any(keyword in d for keyword in healthcare_keywords):
+        return "Healthcare"
+    
+    # 2. Groceries - GENERAL STORES SHOULD GO HERE
+    grocery_keywords = [
+        # Specific grocery brands/stores
+        "jio mart", "dmart", "bigbasket", "blinkit", "zepto", "instamart",
+        "grofers", "more supermarket", "spar", "nature's basket", "easyday",
+        "reliance fresh", "fresh", "supermarket", "hypermarket",
+        
+        # General store indicators
+        "general store", "kirana store", "provision store", "daily needs store",
+        "convenience store", "neighborhood store", "local store",
+        
+        # Grocery items
+        "grocer", "vegetable", "fruit", "milk", "bread", "egg", "rice",
+        "wheat", "pulses", "dal", "atta", "flour", "oil", "spices",
+        "snack", "biscuit", "beverage", "tea", "coffee", "sugar", "salt",
+        "dairy", "butter", "cheese", "yogurt", "paneer", "meat", "fish",
+        "chicken", "egg", "bakery", "pastry", "cake"
+    ]
+    if any(keyword in d for keyword in grocery_keywords):
+        return "Groceries"
+    
+    # 3. Food & Dining (restaurants, cafes, food delivery)
+    food_keywords = [
+        "zomato", "swiggy", "dominos", "pizza hut", "mcdonald", "kfc",
+        "burger king", "subway", "starbucks", "cafe coffee day", "barista",
+        "restaurant", "cafe", "hotel", "eatfit", "canteen", "food",
+        "dining", "lunch", "dinner", "breakfast", "coffee shop",
+        "chai", "juice center", "bakery shop", "dessert", "ice cream", "fast food",
+        "street food", "dhaba", "bar", "pub", "buffet", "meal", "pizzeria",
+        "food court", "food truck", "eat", "dine", "bistro", "grill", "bbq"
+    ]
+    if any(keyword in d for keyword in food_keywords):
+        return "Food & Dining"
+    
+    # 4. Shopping (e-commerce, retail, clothing, electronics - NOT general stores)
+    shopping_keywords = [
+        # E-commerce
+        "amazon", "flipkart", "myntra", "ajio", "meesho", "snapdeal",
+        
+        # Retail chains (not grocery)
+        "shoppers stop", "pantaloons", "westside", "lifestyle", "central",
+        "max fashion", "brand factory", "levis", "pepe jeans", "wrangler",
+        
+        # Electronics
+        "croma", "reliance digital", "vijay sales", "poorvika", "sangeetha",
+        
+        # General shopping terms (excluding store which is too generic)
+        "mall", "market", "purchase", "buy", "fashion", "clothing",
+        "electronics", "furniture", "home decor", "appliances", "shoes",
+        "bags", "jewelry", "accessories", "watch", "cosmetics", "perfume",
+        "footwear", "garment", "apparel", "textile","lenskart","eyewear"
+    ]
+    if any(keyword in d for keyword in shopping_keywords):
+        return "Shopping"
+    
+    # 5. Travel
+    travel_keywords = [
+        "uber", "ola", "rapido", "irctc", "makemytrip", "yatra", "redbus",
+        "taxi", "cab", "bus", "train", "metro", "flight", "airline",
+        "railway", "travel", "booking.com", "hotel booking", "airbnb",
+        "goibibo", "cleartrip", "ixigo", "expedia", "trivago", "ticket",
+        "journey", "commute", "transport", "airport", "railway station"
+    ]
+    if any(keyword in d for keyword in travel_keywords):
+        return "Travel"
+    
+    # 6. Fuel
+    fuel_keywords = [
+        "petrol", "diesel", "fuel", "oil", "indian oil", "bharat petroleum",
+        "shell", "hpcl", "cng", "lpg", "filling station", "petrol pump",
+        "service station", "fuel station", "gas station", "bunk"
+    ]
+    if any(keyword in d for keyword in fuel_keywords):
+        return "Fuel"
+    
+    # 7. Education
+    education_keywords = [
+        "udemy", "coursera", "byju", "unacademy", "school", "college",
+        "education", "course", "tuition", "books", "stationery",
+        "exam", "coaching", "training", "online course", "study material",
+        "khan academy", "learning", "university", "institute", "academy",
+        "library", "tuition center", "coaching center"
+    ]
+    if any(keyword in d for keyword in education_keywords):
+        return "Education"
+    
+    # 8. Entertainment
+    entertainment_keywords = [
+        "netflix", "prime video", "hotstar", "spotify", "bookmyshow",
+        "sony liv", "movie", "cinema", "gaming", "ott", "streaming",
+        "concert", "theatre", "play", "event", "entertainment",
+        "hulu", "disney+", "gaana", "jiosaavn", "audiobook", "spotify premium",
+        "youtube premium", "game", "fun", "amusement", "park", "playstation",
+        "xbox", "nintendo", "casino", "betting"
+    ]
+    if any(keyword in d for keyword in entertainment_keywords):
+        return "Entertainment"
+    
+    # 9. Utilities (check for specific utility patterns first)
+    utilities_keywords = [
+        "electricity", "power", "water", "gas", "bill", "utility",
+        "internet", "wifi", "broadband", "rent", "emi", "insurance",
+        "subscription", "tv subscription", "dth", "maintenance", "property",
+        "housing", "society", "maintenance charge", "property tax"
+    ]
+    # Special check for telecom services that are not recharge
+    if "airtel fiber" in d or "airtel broadband" in d or "jio fiber" in d or "jio broadband" in d:
+        return "Utilities"
+    if any(keyword in d for keyword in utilities_keywords):
+        return "Utilities"
+    
+    # 10. Banking & Finance
+    banking_keywords = [
+        "emi", "loan", "interest", "insurance", "mutual fund", "sip",
+        "credit card", "investment", "stock", "tax", "gst", "bank",
+        "fd", "rd", "saving", "debit card", "net banking", "hdfc",
+        "icici", "sbi", "axis bank", "upi", "finance", "wealth", "portfolio",
+        "brokerage", "demat", "trading", "share", "equity", "bond"
+    ]
+    if any(keyword in d for keyword in banking_keywords):
+        return "Banking & Finance"
+    
+    # 11. Recharge (now with more specific patterns)
+    # Check for telecom operators ONLY with recharge indicators
+    telecom_operators = ["airtel", "jio", "vi", "vodafone", "idea", "bsnl", "reliance"]
+    recharge_indicators = ["recharge", "top-up", "data pack", "plan renewal", "prepaid", "postpaid", "bill payment"]
+    
+    # Check if it's a pure recharge transaction
+    has_telecom = any(operator in d for operator in telecom_operators)
+    has_recharge_indicator = any(indicator in d for indicator in recharge_indicators)
+    
+    if has_telecom and has_recharge_indicator:
+        return "Recharge"
+    
+    # Also check standalone recharge keywords
+    standalone_recharge = ["mobile recharge", "phone recharge", "sim recharge", "balance recharge"]
+    if any(keyword in d for keyword in standalone_recharge):
+        return "Recharge"
+    
+    # 12. Personal Care
+    personal_care_keywords = [
+        "salon", "spa", "gym", "barber", "beauty", "haircut",
+        "skincare", "makeup", "cosmetics", "personal care", "fitness",
+        "wellness center", "massage", "manicure", "pedicure", "aesthetic",
+        "beauty parlor", "beauty salon", "hair salon", "nail art", "waxing"
+    ]
+    if any(keyword in d for keyword in personal_care_keywords):
+        return "Personal Care"
+    
+    # 13. Home & Kitchen
+    home_keywords = [
+        "furniture", "home decor", "appliances", "kitchen", "utensils",
+        "bed", "sofa", "curtains", "lights", "home improvement", "home",
+        "interior", "decoration", "furnishing", "cookware", "crockery",
+        "home center", "home depot", "home town", "home store"
+    ]
+    if any(keyword in d for keyword in home_keywords):
+        return "Home & Kitchen"
+    
+    # 14. Gifts & Donations
+    gifts_keywords = [
+        "gift", "donation", "charity", "birthday gift", "wedding gift",
+        "festival gift", "contribution", "ngo", "trust", "foundation",
+        "help", "support", "fund", "donate", "present", "gift shop"
+    ]
+    if any(keyword in d for keyword in gifts_keywords):
+        return "Gifts & Donations"
+    
+    # 15. Business Expenses
+    business_keywords = [
+        "office", "software", "tools", "stationery", "business", "consulting",
+        "professional", "tax", "invoice", "meeting", "project", "client",
+        "corporate", "company", "firm", "enterprise", "work", "service",
+        "business card", "business lunch", "conference", "seminar", "workshop"
+    ]
+    if any(keyword in d for keyword in business_keywords):
+        return "Business Expenses"
+    
+    # 16. Hobbies & Leisure
+    hobbies_keywords = [
+        "book", "music", "art", "craft", "game", "hobby", "sports",
+        "fitness", "photography", "leisure", "instrument", "painting",
+        "drawing", "reading", "writing", "gardening", "cooking", "knitting",
+        "hobby store", "craft store", "music store", "book store"
+    ]
+    if any(keyword in d for keyword in hobbies_keywords):
+        return "Hobbies & Leisure"
+    
+    # 17. Vehicle Maintenance
+    vehicle_keywords = [
+        "car service", "bike service", "vehicle repair", "oil change",
+        "tyre", "garage", "vehicle", "parking", "toll", "automobile",
+        "workshop", "mechanic", "service center", "auto", "motor",
+        "car wash", "bike wash", "automotive", "spare parts", "accessories"
+    ]
+    if any(keyword in d for keyword in vehicle_keywords):
+        return "Vehicle Maintenance"
+    
+    # 18. Child & Family
+    family_keywords = [
+        "school fee", "tuition", "baby", "childcare", "diaper", "toy",
+        "kids", "family", "child", "play school", "activities", "kid",
+        "children", "parenting", "maternity", "paternity", "nanny",
+        "baby store", "kids wear", "children's store", "toys"
+    ]
+    if any(keyword in d for keyword in family_keywords):
+        return "Child & Family"
+    
+    # 19. Technology & Software
+    tech_keywords = [
+        "software", "app subscription", "saas", "tool", "digital",
+        "license", "cloud", "internet service", "technology", "app",
+        "application", "platform", "system", "it", "computer", "laptop",
+        "printer", "scanner", "hardware", "software store", "tech store"
+    ]
+    if any(keyword in d for keyword in tech_keywords):
+        return "Technology & Software"
+    
+    # 20. Special handling for "store" keyword (AFTER all specific categories)
+    # If description contains "store" but wasn't caught by any category above
+    if "store" in d:
+        # Check what type of store it might be
+        if "medical" in d or "pharma" in d or "chemist" in d:
+            return "Healthcare"
+        elif "general" in d or "kirana" in d or "provision" in d:
+            return "Groceries"
+        elif "book" in d:
+            return "Hobbies & Leisure"
+        elif "gift" in d:
+            return "Gifts & Donations"
+        elif "toy" in d or "kids" in d or "children" in d:
+            return "Child & Family"
+        elif "electronic" in d or "computer" in d or "mobile" in d:
+            return "Shopping"
+        elif "furniture" in d or "home" in d:
+            return "Home & Kitchen"
+        elif "clothing" in d or "fashion" in d or "garment" in d:
+            return "Shopping"
+        else:
+            # Default store to Shopping
+            return "Shopping"
+    
+    # 21. Fallback for telecom operators without recharge indicators
+    if has_telecom:
+        # If it has telecom but no recharge indicator, check for other patterns
+        if "store" in d or "center" in d or "outlet" in d or "shop" in d:
+            return "Shopping"
+        # Default to Recharge if no other pattern matches
+        return "Recharge"
+    
+    # Final fallback
     return "Other Expense"
 
-# =========================
-# PARSE LINE
-# =========================
-def parse_line(line: str):
-    date_match = re.search(r"([A-Z][a-z]{2} \d{2}, \d{4})", line)
-    date = pd.to_datetime(date_match.group(1), format="%b %d, %Y") if date_match else None
 
-    time_match = re.search(r"\b(\d{1,2}:\d{2}(?::\d{2})?\s?(?:AM|PM)?)\b", line, re.I)
+
+
+def parse_line(line):
+    date_match = re.search(r"([A-Z][a-z]{2} \d{2}, \d{4})", line)
+    date = (
+        pd.to_datetime(date_match.group(1), format="%b %d, %Y")
+        if date_match else None
+    )
+
+    time_match = re.search(
+        r"\b(\d{1,2}:\d{2}(?::\d{2})?\s?(?:AM|PM)?)\b",
+        line,
+        re.IGNORECASE
+    )
     time_str = time_match.group(1) if time_match else None
 
-    datetime_val = None
-    if date is not None:
-        datetime_val = pd.to_datetime(
-            f"{date.strftime('%b %d, %Y')} {time_str}" if time_str else date,
+    if date is not None and time_str:
+        datetime = pd.to_datetime(
+            f"{date.strftime('%b %d, %Y')} {time_str}",
             errors="coerce"
         )
+    else:
+        datetime = date  # fallback to date only
 
     amount_match = re.search(r"₹([\d,]+\.?\d*)", line)
-    amount = float(amount_match.group(1).replace(",", "")) if amount_match else 0.0
-
-    type_match = re.search(r"\b(CREDIT|DEBIT)\b", line, re.I)
-    txn_type = type_match.group(1).upper() if type_match else "UNKNOWN"
-
+    amount = (
+        float(amount_match.group(1).replace(",", ""))
+        if amount_match else 0.0
+    )
+    type_match = re.search(r"\b(CREDIT|DEBIT)\b", line)
+    txn_type = type_match.group(1) if type_match else "UNKNOWN"
     desc_match = re.search(
         r"(Received from|Paid to|Cashback from|Transfer to)\s(.+?)\s(CREDIT|DEBIT)",
         line,
-        re.I
+        re.IGNORECASE
     )
     desc = desc_match.group(2) if desc_match else line.strip()
-
-    utr_match = re.search(r"\bUTR(?:\s*No\.?)?[:\-\s]*([0-9]+)\b", line, re.I)
+    utr_match = re.search(
+        r"\bUTR(?:\s*No\.?)?[:\-\s]*([0-9]+)\b",
+        line,
+        re.IGNORECASE
+    )
     utr = utr_match.group(1) if utr_match else None
-
     return {
-        "date": datetime_val,
+        "date": datetime,
         "time": time_str,
-        "datetime": datetime_val,
+        "datetime": datetime,
         "description": desc,
         "type": txn_type,
         "amount": amount,
         "category": categorize(desc, txn_type),
-        "UTR_No": utr,
+        "UTR_No": utr
     }
 
-# =========================
-# UPLOAD ENDPOINT
-# =========================
+   
+
 @app.post("/upload")
 async def upload_pdf(file: UploadFile = File(...)):
     contents = await file.read()
     pdf_bytes = io.BytesIO(contents)
-
     texts = []
     with pdfplumber.open(pdf_bytes) as pdf:
-        for page in pdf.pages:
+        for i, page in enumerate(pdf.pages):
             text = page.extract_text()
-            if text:
-                texts.append(text)
+            texts.append(text)
+    raw_text = "\n".join(texts)
 
-    lines = "\n".join(texts).split("\n")
 
+    lines = raw_text.split("\n")
+
+
+    footer_phrases = [
+        "this is an automatically generated statement",
+        "the recipient specified in this document"
+    ]
+
+  
     clean_lines = []
     for line in lines:
         line = line.strip()
         if not line:
             continue
-        if line.startswith(("Page", "Transaction Statement for", "Date Transaction")):
+        if line.startswith("Page"):
             continue
         if "system generated statement" in line.lower():
             continue
+        if line.startswith("Transaction Statement for"):
+            continue
+        if line.startswith("Date Transaction"):
+            continue
+
+        if any(phrase in line.lower() for phrase in footer_phrases):
+            break  
         clean_lines.append(line)
 
-    filtered_lines = [
-        line for line in clean_lines
-        if re.search(r"\b(CREDIT|DEBIT|UTR)\b", line, re.I)
-    ]
-
+    f_lines=[]
+    for i in range(len(clean_lines)):
+        if re.search(
+            r"\b(CREDIT|DEBIT)\b|\bUTR\s*No\b|\bTransaction\s*ID\b",
+            clean_lines[i],
+            re.IGNORECASE
+        ):
+            f_lines.append(clean_lines[i])
     rows = []
-    i = 0
-    while i < len(filtered_lines) - 1:
-        combined = filtered_lines[i] + " " + filtered_lines[i + 1]
-        rows.append(combined)
-        i += 2
+    j = 0
 
-    parsed = [parse_line(row) for row in rows]
-    df = pd.DataFrame(parsed)
+    while j < len(f_lines):
+        current_line = f_lines[j]
+        if (
+            j + 2 < len(f_lines)
+            and re.search(r"\bUTR\s*No\b", f_lines[j + 2], re.IGNORECASE)
+        ):
+            combined_line = current_line + " " + f_lines[j + 1]+ " " + f_lines[j + 2]
+            rows.append(combined_line)
+            j += 3
+        else:
+            rows.append(current_line+ " " + f_lines[j + 1] )
+            j += 2
+
+    nrows = [parse_line(line) for line in rows]
+    df = pd.DataFrame(nrows)
 
     return {
         "transactions": df.to_dict(orient="records"),
